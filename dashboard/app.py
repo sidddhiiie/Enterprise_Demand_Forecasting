@@ -1,3 +1,4 @@
+import numpy as np
 import streamlit as st
 import requests
 from datetime import date
@@ -11,15 +12,22 @@ st.set_page_config(
 
 st.title("📊 Enterprise Demand Forecasting Platform")
 
+st.info(
+    "This platform uses the M5 Walmart historical sales dataset "
+    "(2011–2016) to demonstrate demand forecasting, historical "
+    "validation, and model performance evaluation."
+)
+
 st.write(
     "Machine Learning-powered retail demand forecasting "
-    "using Random Forest and FastAPI."
+    "with FastAPI historical predictions and seven-day forecasts."
 )
 
 st.divider()
 
 # FastAPI backend
 API_URL = "http://127.0.0.1:8000"
+selected_product = None
 
 st.subheader("📦 Select Product")
 
@@ -43,7 +51,7 @@ try:
 
     # Date selection
     selected_date = st.date_input(
-        "Select Prediction Date",
+        "Select  Historical Prediction Date",
         value=date(2015, 7, 17),
         min_value=date(2011, 2, 26),
         max_value=date(2016, 4, 24)
@@ -109,7 +117,7 @@ results_df = pd.read_csv(
 )
 
 # Display chart for selected product
-if "selected_product" in locals():
+if selected_product is not None:
 
     product_results = results_df[
         results_df["item_id"] == selected_product
@@ -130,7 +138,6 @@ if "selected_product" in locals():
     st.line_chart(chart_data)
 
         # Calculate product-level performance
-    import numpy as np
 
     actual = product_results["sales"]
     predicted = product_results["predicted_sales"]
@@ -195,7 +202,7 @@ st.divider()
 st.subheader("📦 Retail Demand Analytics")
 
 # Calculate sales analytics for the selected product
-if "selected_product" in locals():
+if selected_product is not None:
 
     selected_sales = results_df[
         results_df["item_id"] == selected_product
@@ -233,7 +240,7 @@ if "selected_product" in locals():
 st.divider()
 st.subheader("📅 Monthly Demand Trends")
 
-if "selected_product" in locals():
+if selected_product is not None:
 
     monthly_data = results_df[
         results_df["item_id"] == selected_product
@@ -262,10 +269,10 @@ if "selected_product" in locals():
         "July 2015 and April 2016 are partial months."
     )
 # -----------------------------------
-# 7-Day Future Demand Forecast
+# 7-Day Demand Forecast (Historical Dataset)
 # -----------------------------------
 
-st.subheader("🔮 7-Day Future Demand Forecast")
+st.subheader("🔮 7-Day Demand Forecast (Historical Dataset)")
 
 # Load saved future predictions
 future_forecast_path = (
@@ -288,26 +295,15 @@ selected_future = future_df[
 selected_future = selected_future.sort_values("date")
 
 # Display total forecasted demand
-total_future_demand = selected_future["predicted_sales"].sum()
+if selected_product is None:
+    st.caption("Connect to the prediction API to select a product for the forecast chart.")
+else:
+    total_future_demand = selected_future["predicted_sales"].sum()
 
-st.metric(
-    label="Next 7 Days Predicted Demand",
-    value=f"{total_future_demand:,.0f} units"
-)
-
-# Display future demand chart
-st.line_chart(
-    selected_future.set_index("date")[
-        ["predicted_sales"]
-    ]
-)
-
-st.caption(
-    "Forecast period: April 25 – May 1, 2016. "
-    "Predictions are generated recursively using "
-    "Random Forest V2 and available future calendar "
-    "and price data."
-)
+    st.metric("Next 7 Days Predicted Demand", f"{total_future_demand:,.0f} units")
+    st.line_chart(selected_future.set_index("date")[["predicted_sales"]])
+    first, last = selected_future["date"].min(), selected_future["date"].max()
+    st.caption(f"Forecast dates {first:%d %b %Y} through {last:%d %b %Y}.")
 # ----------------------------------------
 # MODEL PERFORMANCE & BACKTESTING
 # ----------------------------------------
@@ -324,7 +320,7 @@ backtest_file = (
 backtest_df = pd.read_csv(backtest_file)
 
 # Calculate model performance
-rf_mae = (
+model_mae = (
     backtest_df["sales"]
     - backtest_df["predicted_sales"]
 ).abs().mean()
@@ -334,24 +330,21 @@ baseline_mae = (
     - backtest_df["baseline_sales"]
 ).abs().mean()
 
-improvement = (
-    (baseline_mae - rf_mae) / baseline_mae
-) * 100
+improvement = 100 * (1 - model_mae / baseline_mae) if baseline_mae else np.nan
+sales_volume = backtest_df["sales"].abs().sum()
+accuracy = 100 * (1 - backtest_df["absolute_error"].sum() / sales_volume) if sales_volume else np.nan
 
 # Display KPIs
-col1, col2, col3 = st.columns(3)
-
-col1.metric("Random Forest MAE", f"{rf_mae:.2f}")
-col2.metric("Baseline MAE", f"{baseline_mae:.2f}")
-col3.metric(
-    "MAE Improvement",
-    f"{improvement:.2f}%"
-)
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Forecast MAE", f"{model_mae:.2f}")
+col2.metric("Seasonal Naive MAE", f"{baseline_mae:.2f}")
+col3.metric("MAE Improvement", f"{improvement:.2f}%" if np.isfinite(improvement) else "N/A")
+col4.metric("Forecast Accuracy", f"{accuracy:.2f}%" if np.isfinite(accuracy) else "N/A")
 
 st.caption(
-    "Evaluation: 10 sampled rolling-origin windows, "
-    "5 products, 7-day recursive forecasts (350 predictions). "
-    "Uses recorded future calendar and selling-price information."
+    f"Seven-day forecasts across {backtest_df['window_start'].nunique()} held-out windows "
+    f"and {backtest_df['item_id'].nunique()} products ({len(backtest_df):,} predictions). "
+    "Accuracy is 100% minus WAPE. The backtest uses recorded calendar and selling prices."
 )
 # ----------------------------------------
 # FORECAST ACCURACY BY HORIZON
@@ -364,7 +357,7 @@ horizon_file = (
     / "forecast_horizon_metrics.csv"
 )
 
-horizon_df = pd.read_csv(horizon_file)
+horizon_df = pd.read_csv(horizon_file).rename(columns={"RF_MAE": "Model_MAE"})
 
 # Create chart-friendly labels
 horizon_df["Forecast Day"] = (
@@ -373,11 +366,11 @@ horizon_df["Forecast Day"] = (
 
 # Compare model and baseline
 chart_data = horizon_df.set_index("Forecast Day")[
-    ["RF_MAE", "Baseline_MAE"]
+    ["Model_MAE", "Baseline_MAE"]
 ]
 
 chart_data = chart_data.rename(columns={
-    "RF_MAE": "Random Forest",
+    "Model_MAE": "Forecast",
     "Baseline_MAE": "Seasonal Naive"
 })
 
@@ -385,7 +378,7 @@ st.line_chart(chart_data)
 
 st.caption(
     "Lower MAE indicates better forecasting accuracy. "
-    "Each horizon contains 50 predictions."
+    f"Predictions per horizon range from {horizon_df['Predictions'].min()} to {horizon_df['Predictions'].max()}."
 )
 # ----------------------------------------
 # PRODUCT-LEVEL FORECAST PERFORMANCE
@@ -477,7 +470,7 @@ comparison_chart = product_backtest.set_index("date")[
 
 comparison_chart = comparison_chart.rename(columns={
     "sales": "Actual Demand",
-    "predicted_sales": "Random Forest Forecast",
+    "predicted_sales": "Model Forecast",
     "baseline_sales": "Seasonal Naive Forecast"
 })
 
@@ -498,7 +491,7 @@ st.line_chart(
 # ----------------------------------------
 
 # Calculate MAE for the selected product and week
-selected_rf_mae = (
+selected_model_mae = (
     product_backtest["sales"]
     - product_backtest["predicted_sales"]
 ).abs().mean()
@@ -510,16 +503,16 @@ selected_baseline_mae = (
 
 # Calculate improvement percentage
 selected_improvement = (
-    (selected_baseline_mae - selected_rf_mae)
+    (selected_baseline_mae - selected_model_mae)
     / selected_baseline_mae
-) * 100 if selected_baseline_mae > 0 else 0
+) * 100 if selected_baseline_mae > 0 else np.nan
 
 # Display metrics
 metric1, metric2, metric3 = st.columns(3)
 
 metric1.metric(
-    "Random Forest MAE",
-    f"{selected_rf_mae:.2f}"
+    "Forecast MAE",
+    f"{selected_model_mae:.2f}"
 )
 
 metric2.metric(
@@ -529,10 +522,5 @@ metric2.metric(
 
 metric3.metric(
     "MAE Improvement",
-    f"{selected_improvement:.2f}%"
-)
-
-st.caption(
-    "Historical backtest comparison across 10 sampled "
-    "seven-day windows. Gaps between windows are not forecasted."
+    f"{selected_improvement:.2f}%" if np.isfinite(selected_improvement) else "N/A"
 )

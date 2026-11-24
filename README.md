@@ -2,7 +2,7 @@
 
 An end-to-end machine learning project designed to forecast retail product demand using historical sales, calendar events, pricing information, and time-series feature engineering.
 
-The platform integrates a **Random Forest forecasting model, FastAPI backend, and interactive Streamlit dashboard** to support demand analysis and forecasting.
+The platform integrates a **seven-day forecasting ensemble, FastAPI backend, and interactive Streamlit dashboard** to support demand analysis and forecasting.
 
 ## Project Overview
 
@@ -15,7 +15,7 @@ This project demonstrates how historical retail sales data can be transformed in
 - Exploratory data analysis of retail sales patterns
 - Time-series feature engineering with lag and rolling statistics
 - Random Forest regression for demand prediction
-- Recursive seven-day demand forecasting
+- Direct and recursive models blended for seven-day forecasting
 - REST API developed using FastAPI
 - Interactive analytics dashboard built using Streamlit
 - Product-level forecasting performance analysis
@@ -61,27 +61,53 @@ The forecasting model uses a Random Forest Regressor with features including:
 
 The dataset was split chronologically into training, validation, and testing periods.
 
-For seven-day forecasts, predictions are generated recursively: earlier predicted demand values are used as inputs for subsequent days.
+The FastAPI historical prediction endpoints use the one-day Random Forest.
+The seven-day forecaster blends recursive Random Forest predictions with direct,
+horizon-aware gradient boosting. The direct model uses sales available before the
+forecast origin. The blend weight is chosen on the validation period.
 
 ## Model Performance
 
-The saved Random Forest model was evaluated using ten sampled, non-overlapping seven-day forecasting windows within the held-out test period.
+Run `python -m src.forecast` or run `notebooks/02_future_forecasting.ipynb`
+to regenerate the seven-day forecast and dashboard metrics. The command reports
+MAE, RMSE, WAPE, and forecast accuracy for the ensemble, original Random Forest,
+and seasonal naive baseline on all complete held-out weeks and on the original
+ten sampled weeks.
 
-| Metric | Random Forest | Seasonal Naive |
-|---|---:|---:|
-| Mean Absolute Error | 11.83 | 14.56 |
-| Root Mean Squared Error | 16.92 | 20.87 |
+| Held-out evaluation | Ensemble accuracy | Random Forest accuracy | Seasonal naive accuracy |
+|---|---:|---:|---:|
+| 40 complete weeks, 1,400 predictions | 70.12% | 69.41% | 61.60% |
+| Original 10 weeks, 350 predictions | 68.60% | 68.38% | 61.09% |
 
-**MAE improvement: 18.73%**
+On the 40-week evaluation, MAE was 11.28 units for the ensemble, 11.54 for the
+Random Forest, and 14.49 for the seasonal naive baseline. The ensemble weight
+selected on validation was 25% direct gradient boosting and 75% Random Forest.
 
-Evaluation scope:
+Forecast accuracy is `100 × (1 − WAPE)`, where WAPE divides total absolute
+forecast error by total actual sales. The held-out backtest uses recorded target-date
+calendar and selling prices. The future forecast refits both models through the last
+observed date before predicting the following seven days.
 
-- 5 retail products
-- 10 forecasting windows
-- 7 forecast days per window
-- 350 predictions in total
+### XGBoost benchmark
 
-**Evaluation limitation:** Backtesting used recorded future calendar and selling-price information. The reported improvement describes this historical evaluation setup, not guaranteed performance on live future demand.
+The standalone XGBoost pipeline predicts each of the seven days directly.
+The earlier validation period selected a depth-5 model trained on five products
+across ten stores. Evaluation uses the same 1,400 predictions for the five CA_1
+products as the current ensemble.
+
+| Model | Forecast accuracy | WAPE | MAE (units) | RMSE (units) |
+|---|---:|---:|---:|---:|
+| XGBoost | 71.18% | 28.82% | 10.88 | 17.12 |
+| Current ensemble | 70.12% | 29.88% | 11.28 | 17.56 |
+
+The API and dashboard continue to use the existing forecasts. To reproduce the
+XGBoost results, place the M5 source CSVs in `data/raw/` and run these commands
+from the repository root:
+
+```bash
+python -m pip install xgboost-cpu==3.4.1
+python -m src.xgboost_forecast
+```
 
 ## Interactive Dashboard
 
@@ -173,8 +199,7 @@ Open:
 - Developed a machine learning workflow for retail demand forecasting.
 - Implemented lag-based and rolling-window feature engineering.
 - Built recursive seven-day forecasting functionality.
-- Evaluated performance using 350 predictions across ten sampled held-out windows.
-- Achieved an 18.73% reduction in MAE compared with a seasonal naive baseline under the documented evaluation assumptions.
+- Evaluated seven-day forecasts on every complete held-out week and retained the original ten-window comparison.
 - Integrated forecasting outputs into an interactive Streamlit dashboard and FastAPI backend.
 
 ## Future Improvements
@@ -182,7 +207,6 @@ Open:
 - Extend forecasting to more products and stores
 - Introduce additional forecasting algorithms
 - Add automated data ingestion and model retraining
-- Evaluate performance across more historical windows
 - Deploy the API and dashboard to a cloud environment
 - Incorporate inventory planning and replenishment recommendations
 
